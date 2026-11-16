@@ -356,6 +356,8 @@ function renderVersions(p) {
   }
   html += `</div>`;
   if (!versions.length) html += `<div class="layr-muted">No versions recorded yet.</div>`;
+  // Other people's versions of a store plugin: their signer is compared with the one installed.
+  if (p.repository) html += renderForks(p.repository);
   return html;
 }
 
@@ -393,6 +395,31 @@ function renderShare(p) {
   return html;
 }
 
+/** A publisher key's fingerprint as people compare it: its first 16 hex digits in groups of four. */
+function shortKey(fingerprint) {
+  return (String(fingerprint ?? "").slice(0, 16).match(/.{1,4}/g) ?? []).join(" ");
+}
+
+/** Who signed a fork's release, and whether that is someone else than the installed plugin's publisher. */
+function forkSigner(k) {
+  const by = k.signed ? `signed by ${esc(shortKey(k.fingerprint))}` : k.sigError ? "bad signature" : "not signed";
+  const what = k.signerChange === "changed" ? "another publisher" : "unsigned, yours is signed";
+  const other = k.signerChange ? ` <strong class="other-signer">· ${what}</strong>` : "";
+  return `<span class="layr-muted">· ${by}</span>${other}`;
+}
+
+/** The warning when installing replaces the installed plugin's publisher (signed packages). */
+function signerWarning(s) {
+  const what = `${esc(s.id)} ${esc(s.to)}`;
+  const pinned = esc(shortKey(s.pinnedFingerprint));
+  const after = "it replaces the installed one, and its permissions and tool rights start over.";
+  return s.signerChange === "changed"
+    ? `${what} is signed by someone else (key ${esc(shortKey(s.fingerprint))}; the installed one is signed by ` +
+        `${pinned}). Install it only if you trust them: ${after}`
+    : `${what} is not signed, but the installed one is (key ${pinned}). Install it only if you trust where it comes ` +
+        `from: ${after}`;
+}
+
 function renderForks(repository) {
   const f = state.forks;
   let html = `<section><h2>Other people's versions</h2><p class="layr-muted">Copies (forks) of this plugin on GitHub that have a release.</p>`;
@@ -402,7 +429,7 @@ function renderForks(repository) {
   else {
     html += `<div class="versions">${f.forks
       .map((k) => `<div class="version-row"><span class="v">${esc(k.owner)}</span><span style="flex:1">${esc(k.version)}
-        <span class="layr-muted">· ${esc(k.repository)}</span></span>
+        <span class="layr-muted">· ${esc(k.repository)}</span> ${forkSigner(k)}</span>
         <button class="layr-button small" data-action="install-release" data-repo="${esc(k.repository)}" data-tag="${esc(k.tag)}">Install</button></div>`)
       .join("")}</div>`;
   }
@@ -444,15 +471,31 @@ async function openWithClaude(path, prompt, title) {
   await layr.panels.open("thread", { thread: thread.id }, { plugin: "claude" });
 }
 
+// A release's `.sig` is checked and pinned like a store install's: signed by another key than the installed plugin
+// (or unsigned while it is signed), it installs only as a replacement, which the button says.
 async function installRelease(repository, tag) {
   const plan = await core("github_release_install", { repository, tag });
   const steps = plan.steps ?? [];
+  const replace = steps.filter((s) => s.signerChange).map((s) => s.id);
+  const signer = (s) => (s.signed ? ` · signed by ${esc(shortKey(s.fingerprint))}` : " · not signed");
+  const asks = (s) => (s.newPermissions?.length ? ` · asks for ${esc(s.newPermissions.join(", "))}` : "");
   const lines = steps
-    .map((s) => `<li><strong>${esc(s.id)}</strong> ${s.from ? `${esc(s.from)} → ` : ""}${esc(s.to)}${s.newPermissions?.length ? ` · asks for ${esc(s.newPermissions.join(", "))}` : ""}</li>`)
+    .map((s) => `<li><strong>${esc(s.id)}</strong> ${s.from ? `${esc(s.from)} → ` : ""}${esc(s.to)}` +
+      `${signer(s)}${asks(s)}</li>`)
     .join("");
-  const ok = await confirm(`Install ${plan.release?.asset ?? "the release"}?`, `<ul>${lines || "<li>Nothing to change</li>"}</ul>`, "Install");
+  const replaces = (s) =>
+    `This replaces ${esc(s.id)} from ${esc(s.replacesText ?? s.replacesOrigin)} with one from ` +
+    `${esc(s.originText ?? s.origin)}: the tool rights you gave it reset to the defaults.`;
+  const warnings = steps
+    .map((s) => (s.signerChange ? signerWarning(s) : s.replacesOrigin ? replaces(s) : ""))
+    .filter(Boolean)
+    .map((w) => `<span class="signer-warning">${w}</span>`)
+    .join("");
+  const verb = replace.length ? "Install as replacement" : "Install";
+  const body = `${warnings}<ul>${lines || "<li>Nothing to change</li>"}</ul>`;
+  const ok = await confirm(`Install ${plan.release?.asset ?? "the release"}?`, body, verb, replace.length > 0);
   if (!ok) return;
-  await core("github_release_install", { repository, tag, approved: true });
+  await core("github_release_install", { repository, tag, approved: true, ...(replace.length ? { replace } : {}) });
   notify(`Installed ${plan.release?.asset}`, "success");
   await refresh();
 }

@@ -409,3 +409,18 @@ section + section {
     display: none;
   }
 }
+
+/* A fork signed by someone else than the installed plugin's publisher (signed packages). */
+.other-signer {
+  color: var(--danger);
+  font-weight: 600;
+}
+.signer-warning {
+  display: block;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}

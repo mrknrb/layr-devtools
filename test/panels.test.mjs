@@ -4,6 +4,8 @@
 //   cargo build -p layr_cli          (in core/)
 //   node plugins/devtools/test/panels.test.mjs [--out plugins/devtools/screenshots] [--claude]
 //
+// LAYR_EXE: another layr binary (default core/target/debug/layr).
+//
 // --claude also lets a real Claude thread (haiku) combine a conflicting update in the merge folder, and checks that
 // its turn was saved by itself and that Update then uses it.
 import { execFileSync, spawn } from "node:child_process";
@@ -34,7 +36,8 @@ function loadPlaywright() {
 }
 const { chromium } = loadPlaywright();
 
-const exe = path.join(repoRoot, "core", "target", "debug", process.platform === "win32" ? "layr.exe" : "layr");
+const exeName = process.platform === "win32" ? "layr.exe" : "layr";
+const exe = process.env.LAYR_EXE || path.join(repoRoot, "core", "target", "debug", exeName);
 if (!existsSync(exe)) throw new Error(`build the CLI first: cargo build -p layr_cli (no ${exe})`);
 
 // ---------- a temporary world ----------
@@ -48,6 +51,21 @@ mkdirSync(path.join(fakeGh, "releases"), { recursive: true });
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
 const who = (name, email) => ["-c", `user.name=${name}`, "-c", `user.email=${email}`];
 
+// Publisher keys of their own (never the user's): the store's, and a friend's who forks a plugin.
+const storeKey = path.join(tmp, "key-store");
+const friendKey = path.join(tmp, "key-friend");
+execFileSync(exe, ["key", "new", "--home", storeKey]);
+execFileSync(exe, ["key", "new", "--home", friendKey]);
+
+// Another store plugin with a GitHub repository, whose fork is signed by someone else.
+const sky = path.join(storeSrc, "sky");
+const skyManifest = (version) => JSON.stringify({ id: "sky", name: "Sky", version, layr: "^0.1",
+  description: "The sky.", permissions: ["data"], repository: "https://github.com/tester/sky",
+  panels: [{ id: "main", title: "Sky", page: "panels/main.html" }] }, null, 2) + "\n";
+mkdirSync(path.join(sky, "panels"), { recursive: true });
+writeFileSync(path.join(sky, "layr.json"), skyManifest("0.1.0"));
+writeFileSync(path.join(sky, "panels", "main.html"), "<p>Blue</p>\n");
+
 function storeVersion(version, lines, extra = {}) {
   const dir = path.join(storeSrc, "weather");
   mkdirSync(path.join(dir, "panels"), { recursive: true });
@@ -55,7 +73,7 @@ function storeVersion(version, lines, extra = {}) {
     description: "Today's weather.", permissions: ["data"], icon: "cloud",
     panels: [{ id: "main", title: "Weather", page: "panels/main.html" }], ...extra }, null, 2) + "\n");
   writeFileSync(path.join(dir, "panels", "main.html"), lines.join("\n") + "\n");
-  execFileSync(exe, ["registry", "build", storeSrc, store]);
+  execFileSync(exe, ["registry", "build", storeSrc, store, "--home", storeKey]);
 }
 storeVersion("0.1.0", ["<h1>Weather</h1>", "<p>Sunny</p>", "<p>Wind: calm</p>", "<p>Rain: none</p>", "<footer>v1</footer>"]);
 
@@ -139,6 +157,7 @@ const tool = async (name, args = {}, plugin = "layr") => {
 };
 await call("settings.set", { key: "theme", value: { mode: "dark" } });
 await call("packages.install", { id: "weather", version: "0.1.0" });
+await call("packages.install", { id: "sky", version: "0.1.0" });
 
 // ---------- tiny runner ----------
 
@@ -347,6 +366,48 @@ await test("Publish a plugin you made (fake GitHub)", async () => {
   assert(state.releases["tester/counter"][0].tag === "v0.2.0", JSON.stringify(state.releases));
   assert(git(made, "tag", "--list") === "v0.2.0");
   await shot("13-published");
+});
+
+await test("A fork signed by someone else installs only as a replacement", async () => {
+  // friend/sky on the fake GitHub: a release of sky 0.2.0 with its .sig, signed by the friend's key.
+  const forkSrc = path.join(tmp, "fork-src", "sky");
+  cpSync(sky, forkSrc, { recursive: true });
+  writeFileSync(path.join(forkSrc, "layr.json"), skyManifest("0.2.0"));
+  writeFileSync(path.join(forkSrc, "panels", "main.html"), "<p>Blue, with clouds</p>\n");
+  const rel = path.join(fakeGh, "releases", "friend", "sky", "v0.2.0");
+  mkdirSync(rel, { recursive: true });
+  execFileSync(exe, ["pack", forkSrc, "--out", rel]);
+  execFileSync(exe, ["key", "sign", path.join(rel, "sky-0.2.0.zip"), "--out", rel, "--home", friendKey]);
+  const statePath = path.join(fakeGh, "state.json");
+  const state = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, "utf8"))
+    : { releases: {}, forks: {}, parents: {}, prs: [], visibility: {} };
+  state.releases["friend/sky"] = [{ tag: "v0.2.0", assets: ["sky-0.2.0.zip", "sky-0.2.0.zip.sig"] }];
+  state.forks["tester/sky"] = ["friend/sky"];
+  writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+  await item("sky").click();
+  await idle();
+  await page.click('.tab[data-tab="versions"]');
+  await page.click('[data-action="forks"]');
+  await page.waitForSelector(".version-row .other-signer");
+  const row = await page.locator(".version-row:has(.other-signer)").textContent();
+  assert(row.includes("friend") && row.includes("signed by") && row.includes("another publisher"), row);
+  await shot("14-fork-signed-by-someone-else");
+  await page.click('[data-action="install-release"][data-repo="https://github.com/friend/sky"]');
+  await page.waitForSelector("#modal:not([hidden]) .signer-warning");
+  const box = await page.locator("#modalBox").textContent();
+  assert(box.includes("signed by someone else") && box.includes("start over"), box);
+  const ok = await page.locator("#modalBox [data-answer=ok]").textContent();
+  assert(ok.trim() === "Install as replacement", ok);
+  await shot("15-install-as-replacement");
+  await page.click("#modalBox [data-answer=ok]");
+  await idle();
+  let info;
+  for (let i = 0; i < 50 && info?.version !== "0.2.0"; i++, await sleep(100)) {
+    info = (await call("packages.list")).find((p) => p.id === "sky");
+  }
+  assert(info?.version === "0.2.0", JSON.stringify(info));
 });
 
 await test("No page errors", async () => {
