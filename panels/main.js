@@ -525,6 +525,9 @@ const actions = {
       <div class="buttons"><button class="layr-button" data-answer="no">Cancel</button><button class="layr-button primary" data-answer="ok">Start</button></div>`,
       () => $("#claudeAsk").value.trim());
     if (!prompt) return;
+    // A thread on the plugin (claude 0.3.2: it shows under Plugins, and knows how layr plugins work); older ones: its folder.
+    const started = await claude("thread_start", { target: { kind: "plugin", plugin: p.id }, prompt }).catch(() => null);
+    if (started?.thread) return void (await layr.panels.open("thread", { thread: started.thread.id }, { plugin: "claude" }));
     await openWithClaude(p.path, `This folder is the layr plugin "${p.name}". ${prompt}`, `${p.name}: ${prompt.slice(0, 40)}`);
   },
   async toggle(el) {
