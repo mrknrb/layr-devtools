@@ -1,6 +1,7 @@
 // "My plugins": plugins you made or changed, with their history (Undo, Restore to here, Save version), versions and
 // updates, and sharing on GitHub. Git stays behind these words; the core does the work through its layr__plugin_*
-// and layr__github_* tools (docs/ARCHITECTURE.md > The store > The git tools, GitHub).
+// and layr__github_* tools (docs/ARCHITECTURE.md > The store > The git tools, GitHub). Each plugin's health: its open
+// problems (problems.list, layr:problems; docs/ARCHITECTURE.md > Problems), handed to the care plugin when it is there.
 await layr.ready;
 
 const $ = (sel) => document.querySelector(sel);
@@ -35,6 +36,10 @@ const state = {
   published: null,
   submitted: null,
   claude: false,
+  /** Every plugin's problems: {list, open: {<plugin>: n}}; null when the core has none (an older one). */
+  problems: null,
+  /** The selected plugin's problem titles shown inline (without the care plugin). */
+  showProblems: false,
   /** What was typed into forms, kept across renders (by input id, or name for radios). */
   form: {},
 };
@@ -113,6 +118,19 @@ async function loadRepos() {
   }
 }
 
+/** Every plugin's problems (devtools has `packages`, so it sees all of them); nothing when the core can't say. */
+async function loadProblems() {
+  try {
+    const r = await layr.call("problems.list", {});
+    state.problems = { list: Array.isArray(r?.problems) ? r.problems : [], open: r?.open ?? {} };
+  } catch {
+    state.problems = null; // an older core (-32601) or no right: show nothing
+  }
+}
+const openProblems = (id) => state.problems?.open?.[id] ?? 0;
+/** Plugin care (plugins/care) installed: it shows and fixes problems, and adds checks with Claude. */
+const careInstalled = () => state.repos.some((p) => p.id === "care");
+
 async function loadSelected() {
   const p = current();
   state.history = null;
@@ -139,7 +157,7 @@ async function loadSelected() {
 
 async function refresh(keepView = true) {
   await act("Loading", async () => {
-    await loadRepos();
+    await Promise.all([loadRepos(), loadProblems()]);
     if (state.view === "plugin") await loadSelected();
     if (!keepView) state.view = "plugin";
   });
@@ -177,7 +195,7 @@ function renderList() {
             : `using ${p.version} as it came`
           : p.version;
       html += `<button class="plugin-item" data-select="${esc(p.id)}" aria-current="${sel}">
-        <span class="row"><span class="name">${esc(p.name)}</span>${p.dirty ? `<span class="dot" title="Changes not saved yet"></span>` : ""}</span>
+        <span class="row"><span class="name">${esc(p.name)}</span>${p.dirty ? `<span class="dot" title="Changes not saved yet"></span>` : ""}${healthDot(p)}</span>
         <span class="meta">${esc(meta)}</span></button>`;
     }
   }
@@ -189,6 +207,36 @@ function renderList() {
 function renderGithubNav() {
   const g = state.gh;
   $("#githubState").textContent = !g || g.checking ? "GitHub" : g.signedIn ? `GitHub: ${g.user}` : "GitHub: not signed in";
+}
+
+// ------------------------------------------------------------------ rendering: health
+
+const problemsText = (n) => `${n} problem${n === 1 ? "" : "s"}`;
+function healthDot(p) {
+  const n = openProblems(p.id);
+  return n ? `<span class="health" title="${problemsText(n)}">${n}</span>` : "";
+}
+/** The selected plugin's health badge: opens Plugin care, or its problems right here. */
+function healthBadge(p) {
+  const n = openProblems(p.id);
+  if (!n) return "";
+  const title = careInstalled() ? "Open in Plugin care" : state.showProblems ? "Hide them" : "Show them";
+  return `<button class="health-badge" data-action="problems" title="${title}">${problemsText(n)}</button>`;
+}
+function problemList(p) {
+  if (!state.showProblems || careInstalled() || !openProblems(p.id)) return "";
+  const shown = (x) => x.plugin === p.id && (x.state === "open" || x.state === "fixing");
+  const items = (state.problems?.list ?? []).filter(shown);
+  return `<div class="notice bad problems"><div class="grow"><strong>What went wrong</strong><ul>${items
+    .map((x) => `<li>${esc(x.title || x.id)}${x.state === "fixing" ? " (being fixed)" : ""}</li>`)
+    .join("")}</ul></div></div>`;
+}
+/** Problems changed: the list's dots and the selected plugin's badge, without drawing the rest again. */
+function renderHealth() {
+  renderList();
+  const p = state.view === "plugin" ? current() : null;
+  if ($("#health")) $("#health").innerHTML = p ? healthBadge(p) : "";
+  if ($("#problemList")) $("#problemList").innerHTML = p ? problemList(p) : "";
 }
 
 // ------------------------------------------------------------------ rendering: one plugin
@@ -223,9 +271,10 @@ function render() {
     <div class="detail-head">
       <div class="title-row"><h1>${esc(p.name)}</h1>
         <span class="layr-badge badge-${p.kind}">${kindLabel[p.kind]}</span>
-        <span class="layr-muted">${esc(p.version)}</span></div>
+        <span class="layr-muted">${esc(p.version)}</span><span id="health">${healthBadge(p)}</span></div>
       <div class="sub">${sub}</div>
       <div class="actions">${actionButtons(p)}</div>
+      <div id="problemList">${problemList(p)}</div>
       <div class="tabs" role="tablist">${tabs
         .map((t) => `<button class="tab" role="tab" data-tab="${t}" aria-selected="${state.tab === t}">${{ history: "History", versions: "Versions", share: "Share" }[t]}</button>`)
         .join("")}</div>
@@ -243,6 +292,10 @@ function actionButtons(p) {
   }
   if ((p.kind === "made" || p.running === "mine") && state.claude && !p.insideRepo) {
     b.push(`<button class="layr-button" data-action="claude">Change it with Claude</button>`);
+  }
+  if ((p.kind === "made" || p.running === "mine") && careInstalled() && !p.insideRepo) {
+    const why = "Claude adds checks to it that notice when it breaks";
+    b.push(`<button class="layr-button" data-action="checks" title="${why}">Add checks with Claude</button>`);
   }
   if (state.update?.to) b.push(`<button class="layr-button" data-tab="versions">Update to ${esc(state.update.to)}</button>`);
   if (p.kind === "made" && !p.insideRepo) b.push(`<button class="layr-button" data-tab="share">Publish</button>`);
@@ -530,6 +583,27 @@ const actions = {
     if (started?.thread) return void (await layr.panels.open("thread", { thread: started.thread.id }, { plugin: "claude" }));
     await openWithClaude(p.path, `This folder is the layr plugin "${p.name}". ${prompt}`, `${p.name}: ${prompt.slice(0, 40)}`);
   },
+  async problems() {
+    const p = current();
+    if (careInstalled()) return void (await layr.panels.open("main", { plugin: p.id }, { plugin: "care" }));
+    state.showProblems = !state.showProblems;
+    renderHealth();
+  },
+  async checks() {
+    const p = current();
+    // care__add_checks starts a Claude thread on the plugin; it may answer the thread to show.
+    const r = await layr.tools.call("add_checks", { plugin: p.id }, { plugin: "care" });
+    if (r?.isError) throw new Error(r?.content?.[0]?.text || "Plugin care couldn't start it");
+    let v = r?.structuredContent;
+    try {
+      v ??= JSON.parse(r?.content?.[0]?.text ?? "null");
+    } catch {
+      // a plain text answer
+    }
+    const thread = typeof v?.thread === "string" ? v.thread : v?.thread?.id;
+    if (thread) return void (await layr.panels.open("thread", { thread }, { plugin: "claude" }));
+    notify(`Claude is adding checks to ${p.name}`, "success");
+  },
   async toggle(el) {
     const sha = el.dataset.sha;
     state.openCommit = state.openCommit === sha ? null : sha;
@@ -651,6 +725,7 @@ document.addEventListener("click", async (e) => {
     state.published = null;
     state.submitted = null;
     state.form = {};
+    state.showProblems = false;
     layr.panel.setState({ selected: state.selected }).catch(() => {});
     render();
     await act("Loading", loadSelected);
@@ -694,6 +769,15 @@ layr.events.on("layr:packages", (e) => {
     else refresh();
   };
   soon = setTimeout(later, 400);
+});
+// Problems found or fixed: the dots and the badge follow (a few changes at once ask once).
+let problemsSoon = null;
+layr.events.on("layr:problems", () => {
+  clearTimeout(problemsSoon);
+  problemsSoon = setTimeout(async () => {
+    await loadProblems();
+    renderHealth();
+  }, 300);
 });
 
 if (layr.info?.params?.plugin) state.selected = layr.info.params.plugin;

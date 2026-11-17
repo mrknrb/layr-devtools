@@ -424,3 +424,39 @@ section + section {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
   color: var(--danger);
 }
+
+/* health: open problems (docs/ARCHITECTURE.md > Problems) */
+.health {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  flex: none;
+}
+.health-badge {
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.health-badge:hover {
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+}
+.problems {
+  margin: 12px 0 0;
+}
+.problems ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}

@@ -410,6 +410,137 @@ await test("A fork signed by someone else installs only as a replacement", async
   assert(info?.version === "0.2.0", JSON.stringify(info));
 });
 
+await test("No health shown without problems (or without problems.list, an older core)", async () => {
+  assert(await page.locator(".health, .health-badge").count() === 0, "no health dot or badge");
+  assert(await page.locator('[data-action="checks"]').count() === 0, "no Add checks without Plugin care");
+});
+
+// ---------- health, with fakes: problems.list, layr:problems and the care plugin (docs/ARCHITECTURE.md › Problems)
+// The panel's layr.js is wrapped as it loads: problems.list and care's tools answer from window.__fake, layr:problems
+// handlers are kept to call, and plugin_repos lists care when __fake.care says it is installed.
+function fakeHealth() {
+  const f = (window.__fake = {
+    care: false,
+    problems: [
+      { key: "counter/self/feed", plugin: "counter", id: "feed", source: "self", title: "The feed has no videos",
+        state: "open" },
+      { key: "counter/tool/count", plugin: "counter", id: "count", source: "tool", title: "count failed",
+        state: "open" },
+      { key: "counter/panel/error-1a2b3c4d", plugin: "counter", id: "error-1a2b3c4d", source: "panel",
+        title: "x is undefined", state: "fixing" },
+    ],
+    open: { counter: 2 },
+    careCalls: [],
+    opened: [],
+    handlers: [],
+  });
+  let real;
+  Object.defineProperty(window, "layr", {
+    configurable: true,
+    get: () => real,
+    set(sdk) {
+      real = sdk;
+      const call = sdk.call, toolsCall = sdk.tools.call, on = sdk.events.on, open = sdk.panels.open;
+      sdk.call = (method, params) => method === "problems.list"
+        ? Promise.resolve({ problems: f.problems, open: f.open })
+        : call.call(sdk, method, params);
+      sdk.tools.call = async (tool, args, opts) => {
+        if (opts?.plugin === "care") {
+          f.careCalls.push({ tool, args });
+          return { structuredContent: { started: true } };
+        }
+        const r = await toolsCall.call(sdk.tools, tool, args, opts);
+        if (tool === "plugin_repos" && f.care) {
+          const care = { id: "care", name: "Plugin care", kind: "store", version: "0.1.0", path: "care" };
+          r.structuredContent.plugins.push(care);
+        }
+        return r;
+      };
+      sdk.events.on = (topic, fn) => {
+        if (topic !== "layr:problems") return on.call(sdk.events, topic, fn);
+        f.handlers.push(fn);
+        return () => {};
+      };
+      sdk.panels.open = (panel, params, opts) => {
+        if (opts?.plugin !== "care") return open.call(sdk.panels, panel, params, opts);
+        f.opened.push({ panel, params, plugin: opts.plugin });
+        return Promise.resolve({});
+      };
+    },
+  });
+}
+const healthPage = await context.newPage();
+healthPage.on("pageerror", (e) => errors.push(e.message));
+healthPage.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+await healthPage.addInitScript(fakeHealth);
+await healthPage.goto((await call("panels.create", { plugin: "devtools", panel: "main" })).url);
+const fake = (fn) => healthPage.evaluate(fn);
+const healthIdle = () => healthPage.waitForFunction(() => !document.body.classList.contains("busy"));
+
+await test("Health: open problems on the plugin, its titles inline without Plugin care", async () => {
+  await healthPage.waitForSelector('.plugin-item[data-select="counter"] .health');
+  const dot = healthPage.locator('.plugin-item[data-select="counter"] .health');
+  assert(await dot.textContent() === "2", "2 in the list");
+  assert(await healthPage.locator('.plugin-item[data-select="weather"] .health').count() === 0, "weather is fine");
+  await healthPage.click('[data-select="counter"]');
+  await healthIdle();
+  assert(await healthPage.locator(".health-badge").textContent() === "2 problems", "the badge");
+  assert(await healthPage.locator('[data-action="checks"]').count() === 0, "no Add checks without Plugin care");
+  await healthPage.click(".health-badge");
+  const titles = await healthPage.locator("#problemList li").allTextContents();
+  assert(titles.length === 3 && titles[0] === "The feed has no videos" && titles[2].includes("being fixed"),
+    JSON.stringify(titles));
+  await healthPage.screenshot({ path: path.join(OUT, "16-problems.png") });
+  await healthPage.click(".health-badge");
+  assert(await healthPage.locator("#problemList li").count() === 0, "a second click hides them");
+});
+
+await test("Health: follows layr:problems", async () => {
+  await fake(() => {
+    const f = window.__fake;
+    f.problems[0].state = "fixed";
+    f.open = { counter: 1 };
+    f.handlers.forEach((fn) => fn({ op: "changed", problem: f.problems[0] }));
+  });
+  await healthPage.waitForFunction(() => document.querySelector(".health-badge")?.textContent === "1 problem");
+  assert(await healthPage.locator('.plugin-item[data-select="counter"] .health').textContent() === "1", "the list too");
+  await fake(() => {
+    const f = window.__fake;
+    f.open = {};
+    f.handlers.forEach((fn) => fn({ op: "removed", plugin: "counter" }));
+  });
+  await healthPage.waitForFunction(() => !document.querySelector(".health-badge, .health"));
+  await fake(() => {
+    const f = window.__fake;
+    f.open = { counter: 1 };
+    f.handlers.forEach((fn) => fn({ op: "changed", problem: f.problems[1] }));
+  });
+  await healthPage.waitForSelector(".health-badge");
+});
+
+await test("Health with Plugin care: the badge opens it, Add checks with Claude asks it", async () => {
+  await fake(() => (window.__fake.care = true));
+  await healthPage.click("#refresh");
+  await healthIdle();
+  await healthPage.waitForSelector('[data-action="checks"]');
+  await healthPage.screenshot({ path: path.join(OUT, "17-care-actions.png") });
+  await healthPage.click('[data-action="checks"]');
+  await healthIdle();
+  const calls = await fake(() => window.__fake.careCalls);
+  assert(calls.length === 1 && calls[0].tool === "add_checks" && calls[0].args.plugin === "counter",
+    JSON.stringify(calls));
+  await healthPage.click(".health-badge");
+  await healthIdle();
+  const opened = await fake(() => window.__fake.opened);
+  assert(opened.length === 1 && opened[0].panel === "main" && opened[0].plugin === "care" &&
+    opened[0].params.plugin === "counter", JSON.stringify(opened));
+  assert(await healthPage.locator("#problemList li").count() === 0, "no inline list with Plugin care");
+  // A store plugin as it came: Claude can't change it from here, so no Add checks.
+  await healthPage.click('[data-select="sky"]');
+  await healthIdle();
+  assert(await healthPage.locator('[data-action="checks"]').count() === 0, "not on a store plugin as it came");
+});
+
 await test("No page errors", async () => {
   assert(!errors.length, errors.join("\n"));
 });

@@ -9,7 +9,9 @@
   "permissions": ["data", "packages"],
   "connections": [
     { "plugin": "claude", "groups": ["run"],
-      "why": "Change it with Claude and Combine with Claude: starts a Claude thread in the plugin's folder" }
+      "why": "Change it with Claude and Combine with Claude: starts a Claude thread in the plugin's folder" },
+    { "plugin": "care",
+      "why": "A plugin's problems open in Plugin care, and Add checks with Claude asks it to add checks to the plugin" }
   ],
   "panels": [
     { "id": "main", "title": "My plugins", "page": "panels/main.html", "icon": "history", "single": true }
