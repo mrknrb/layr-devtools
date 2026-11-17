@@ -1,12 +1,16 @@
 {
   "id": "devtools",
   "name": "My plugins",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Plugins you made or changed: their history with undo, versions and updates, and sharing them on GitHub.",
   "author": "layr",
   "layr": "^0.1",
   "icon": "history",
-  "permissions": ["data", "packages", "plugins:claude"],
+  "permissions": ["data", "packages"],
+  "connections": [
+    { "plugin": "claude", "groups": ["run"],
+      "why": "Change it with Claude and Combine with Claude: starts a Claude thread in the plugin's folder" }
+  ],
   "panels": [
     { "id": "main", "title": "My plugins", "page": "panels/main.html", "icon": "history", "single": true }
   ],
