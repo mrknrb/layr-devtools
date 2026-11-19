@@ -1,7 +1,7 @@
 {
   "id": "devtools",
   "name": "My plugins",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Plugins you made or changed: their history with undo, versions and updates, and sharing them on GitHub.",
   "author": "layr",
   "layr": "^0.1",
