@@ -1,27 +1,17 @@
 {
   "id": "devtools",
   "name": "My plugins",
-  "version": "0.1.4",
-  "description": "Plugins you made or changed: their history with undo, versions and updates, and sharing them on GitHub.",
+  "version": "0.2.0",
+  "description": "My plugins is part of layr now: each plugin's history with undo, versions, updates and sharing on GitHub are on its page in the Plugins list. This plugin only points there and can be uninstalled.",
   "author": "layr",
   "layr": "^0.1",
   "icon": "history",
-  "permissions": ["data", "packages"],
-  "connections": [
-    { "plugin": "claude", "groups": ["run"],
-      "why": "Change it with Claude and Combine with Claude: starts a Claude thread in the plugin's folder" },
-    { "plugin": "care",
-      "why": "A plugin's problems open in Plugin care, and Add checks with Claude asks it to add checks to the plugin" }
-  ],
+  "permissions": [],
   "panels": [
     { "id": "main", "title": "My plugins", "page": "panels/main.html", "icon": "history", "single": true }
   ],
   "commands": [
     { "id": "open", "title": "My plugins", "panel": "main" },
     { "id": "github", "title": "My plugins: GitHub", "panel": "main", "params": { "view": "github" } }
-  ],
-  "menus": [
-    { "menu": "Tools", "command": "open", "group": "8" },
-    { "menu": "Tools", "command": "github", "group": "8" }
   ]
 }
