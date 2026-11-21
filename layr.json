@@ -1,7 +1,7 @@
 {
   "id": "devtools",
   "name": "My plugins",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "My plugins is part of layr now: each plugin's history with undo, versions, updates and sharing on GitHub are on its page in the Plugins list. This plugin only points there and can be uninstalled.",
   "author": "layr",
   "layr": "^0.1",
